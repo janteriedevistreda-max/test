@@ -1,4 +1,4 @@
---[[ Protected by Lua Guard ]]
+
 
 ( function (...) local Players = game:GetService("\080\108\097\121\101\114\115") local RunService = game:GetService("\082\117\110\083\101\114\118\105\099\101") local UserInputService = game:GetService("\085\115\101\114\073\110\112\117\116\083\101\114\118\105\099\101") local ReplicatedStorage = game:GetService("\082\101\112\108\105\099\097\116\101\100\083\116\111\114\097\103\101") local Debris = game:GetService("\068\101\098\114\105\115") local LocalPlayer = Players.LocalPlayer local Camera = workspace.CurrentCamera local Env = (getgenv and getgenv()) or _G local State = Env.SilentAimState if type(State) ~= "\116\097\098\108\101" or State.JobId ~= game.JobId then State = { JobId = game.JobId } Env.SilentAimState = State end
  if type(State.Connections) == "\116\097\098\108\101" then for _, oldConn in ipairs(State.Connections) do pcall( function () oldConn:Disconnect() end
