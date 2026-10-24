@@ -1,0 +1,559 @@
+--[[ Protected by Lua Guard ]]
+
+( function (...) local Players = game:GetService("\080\108\097\121\101\114\115") local RunService = game:GetService("\082\117\110\083\101\114\118\105\099\101") local UserInputService = game:GetService("\085\115\101\114\073\110\112\117\116\083\101\114\118\105\099\101") local ReplicatedStorage = game:GetService("\082\101\112\108\105\099\097\116\101\100\083\116\111\114\097\103\101") local Debris = game:GetService("\068\101\098\114\105\115") local LocalPlayer = Players.LocalPlayer local Camera = workspace.CurrentCamera local Env = (getgenv and getgenv()) or _G local State = Env.SilentAimState if type(State) ~= "\116\097\098\108\101" or State.JobId ~= game.JobId then State = { JobId = game.JobId } Env.SilentAimState = State end
+ if type(State.Connections) == "\116\097\098\108\101" then for _, oldConn in ipairs(State.Connections) do pcall( function () oldConn:Disconnect() end
+ ) end
+ end
+ State.Connections = {} if type(State.ESPStop) == "\102\117\110\099\116\105\111\110" then pcall(State.ESPStop) State.ESPStop = nil end
+ if type(State.ItemStop) == "\102\117\110\099\116\105\111\110" then pcall(State.ItemStop) State.ItemStop = nil end
+ for _, oldKey in ipairs({ "\076\097\115\101\114\083\105\103\104\116", "\069\120\116\114\097\073\110\118\101\110\116\111\114\121\083\108\111\116\115" }) do local old = Env[oldKey] if type(old) == "\116\097\098\108\101" then if type(old.Connections) == "\116\097\098\108\101" then for _, oldConn2 in ipairs(old.Connections) do pcall( function () oldConn2:Disconnect() end
+ ) end
+ end
+ old.Token = {} end
+ end
+ local function trackConnection(conn) table.insert(State.Connections, conn) return conn end
+ local Config = { Enabled = false, TeamCheck = true, ShowFOV = false, WallCheck = true, ShowHitRay = false, PlayerESP = false, ItemESP = true, ExtraSlots = true, LaserSight = true, PanelKey = Enum.KeyCode.LeftBracket, CyclePartKey = Enum.KeyCode.P, AliveCheck = true, IgnoreForceField = true, MaxDistance = math.huge, FOV = 160, FOVDefault = 160, FOVMin = 40, FOVMax = 700, AimModes = { "\072\101\097\100", "\085\112\112\101\114\084\111\114\115\111", "\084\111\114\115\111", "\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116", "\067\108\111\115\101\115\116" }, AimModeIndex = 1, AimParts = { "\072\101\097\100", "\085\112\112\101\114\084\111\114\115\111", "\084\111\114\115\111", "\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116" }, MaxBendAngle = 45, MinRayLength = 50, MaxOriginDistance = 30, FOVAnchor = "\109\111\117\115\101", FOVColor = Color3.fromRGB(255, 90, 90), FOVThickness = 1.5, DebugRays = false, RayColor = Color3.fromRGB(120, 255, 140), RayTime = 2, ESP = { UpdateInterval = 0.30, FillTransparency = 1, OutlineTransparency = 0, TeamColorMultiplier = 0.22, ShowTeammates = true, ShowEnemies = true, }, HookRaycast2 = true, HookBulletFactory = true, FixHitPacket = true, } local function currentAimMode(): string return Config.AimModes[Config.AimModeIndex] end
+ local TEAMCOLORS = { Bergmann = Color3.fromRGB(139, 90, 43), Alamont = Color3.fromRGB(160, 160, 160), Yoromoto = Color3.fromRGB(245, 245, 245), Halfwell = Color3.fromRGB(60, 120, 220), Renetti = Color3.fromRGB(60, 200, 100), } local TEAM_CACHE_TTL = 30 local playerTeamCache = {} local function detectTeamFromCharacter(character: Model?): string? if not character then return nil end
+ for _, child in ipairs(character:GetChildren()) do local name = child.Name:lower() if name:find("\098\101\114\103\109\097\110\110") then return "\066\101\114\103\109\097\110\110" elseif name:find("\097\108\097\109\111\110\116") then return "\065\108\097\109\111\110\116" elseif name:find("\121\111\114\111") then return "\089\111\114\111\109\111\116\111" elseif name:find("\115\117\105\116\106\097\099\107\101\116") then return "\072\097\108\102\119\101\108\108" end
+ end
+ return nil end
+ local function getPlayerTeam(player: Player?): string? if not player then return nil end
+ local now = os.clock() local cached = playerTeamCache[player] if cached and now - cached.at < TEAM_CACHE_TTL then return cached.team end
+ local detected = detectTeamFromCharacter(player.Character) if not detected and player.Character and player.Character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100") then detected = "\082\101\110\101\116\116\105" end
+ if detected then playerTeamCache[player] = { team = detected, at = now } end
+ return detected end
+ local function getCharacterTeam(character: Model?): string? if not character then return nil end
+ local player = Players:GetPlayerFromCharacter(character) if player then return getPlayerTeam(player) end
+ return detectTeamFromCharacter(character) end
+ local function isSameTeam(player: Player): boolean local myTeam = getCharacterTeam(LocalPlayer.Character) local theirTeam = getCharacterTeam(player.Character) if myTeam and theirTeam then return myTeam == theirTeam end
+ if player.Team and LocalPlayer.Team then return player.Team == LocalPlayer.Team end
+ return false end
+ Players.PlayerRemoving:Connect( function (player) playerTeamCache[player] = nil end
+ ) local Raycast2 do local shared = ReplicatedStorage:WaitForChild("\083\104\097\114\101\100", 10) local mod = shared and shared:WaitForChild("\082\097\121\099\097\115\116\050", 10) if mod then local ok, res = pcall(require, mod) if ok then Raycast2 = res else end
+ else end
+ end
+ local OriginalRaycast if Raycast2 then OriginalRaycast = State.Raycast2 or Raycast2.Raycast State.Raycast2 = OriginalRaycast end
+ local BulletFactory do local folder = ReplicatedStorage:WaitForChild("\067\111\109\112\111\110\101\110\116\115", 10) local mod = folder and folder:WaitForChild("\066\117\108\108\101\116\070\097\099\116\111\114\121", 10) if mod then local ok, res = pcall(require, mod) if ok then BulletFactory = res else end
+ else end
+ end
+ local OriginalRaycastFire if BulletFactory and BulletFactory.RaycastFire then OriginalRaycastFire = State.RaycastFire or BulletFactory.RaycastFire State.RaycastFire = OriginalRaycastFire end
+ local Packets do local shared = ReplicatedStorage:WaitForChild("\083\104\097\114\101\100", 10) local mod = shared and shared:WaitForChild("\080\097\099\107\101\116\115", 10) if mod then local ok, res = pcall(require, mod) if ok then Packets = res else end
+ else end
+ end
+ local World do local candidates = {} local root = ReplicatedStorage:FindFirstChild("\087\111\114\108\100") if root then table.insert(candidates, root) end
+ for _, folderName in ipairs({ "\083\104\097\114\101\100", "\067\111\109\112\111\110\101\110\116\115" }) do local folder = ReplicatedStorage:FindFirstChild(folderName) local child = folder and folder:FindFirstChild("\087\111\114\108\100") if child then table.insert(candidates, child) end
+ end
+ local mod for _, child in ipairs(candidates) do if child:IsA("\077\111\100\117\108\101\083\099\114\105\112\116") then mod = child break end
+ end
+ if not mod then mod = ReplicatedStorage:WaitForChild("\087\111\114\108\100", 5) end
+ if mod then local ok, res = pcall(require, mod) if ok and res ~= nil and (type(res) == "\116\097\098\108\101" or type(res) == "\117\115\101\114\100\097\116\097") then World = res else end
+ else end
+ end
+ local World_m = World local function entityName(ent: any): string if type(ent) ~= "\116\097\098\108\101" then return "\060\110\111\110\101\062" end
+ local mi = ent.MarketItem if type(mi) == "\116\097\098\108\101" and type(mi.Name) == "\115\116\114\105\110\103" and #mi.Name > 0 then return mi.Name end
+ local hold = ent.Holdable if type(hold) == "\116\097\098\108\101" and type(hold.Name) == "\115\116\114\105\110\103" and #hold.Name > 0 then return hold.Name end
+ local ok, inst = pcall( function () local model = ent.Model return model and model.Instance end
+ ) if ok and typeof(inst) == "\073\110\115\116\097\110\099\101" then return inst.Name end
+ return "\060\117\110\110\097\109\101\100\062" end
+ local redirectedLastShot = false local THEME = { Bg = Color3.fromRGB(22, 22, 27), Row = Color3.fromRGB(34, 34, 41), Stroke = Color3.fromRGB(55, 55, 65), Text = Color3.fromRGB(225, 225, 230), Dim = Color3.fromRGB(140, 140, 150), On = Color3.fromRGB(60, 170, 90), Off = Color3.fromRGB(70, 70, 78), Accent = Color3.fromRGB(255, 90, 90), } local PlayerGui = LocalPlayer:WaitForChild("\080\108\097\121\101\114\071\117\105", 10) local function makeGui(name: string): ScreenGui local old = PlayerGui:FindFirstChild(name) if old then old:Destroy() end
+ local gui = Instance.new("\083\099\114\101\101\110\071\117\105") gui.Name = name gui.ResetOnSpawn = false gui.IgnoreGuiInset = true gui.DisplayOrder = 999 gui.Parent = PlayerGui return gui end
+ local function addCorner(parent: Instance, radius: number) local c = Instance.new("\085\073\067\111\114\110\101\114") c.CornerRadius = UDim.new(0, radius) c.Parent = parent end
+ local function addStroke(parent: Instance, color: Color3, thickness: number) local s = Instance.new("\085\073\083\116\114\111\107\101") s.Color = color s.Thickness = thickness s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border s.Parent = parent end
+ local function createToggle(parent: Instance, label: string, default: boolean, onChange: (boolean) -> ()) local row = Instance.new("\070\114\097\109\101") row.Size = UDim2.new(1, 0, 0, 32) row.BackgroundColor3 = THEME.Row row.BorderSizePixel = 0 row.Parent = parent addCorner(row, 6) local lbl = Instance.new("\084\101\120\116\076\097\098\101\108") lbl.Size = UDim2.new(1, -56, 1, 0) lbl.Position = UDim2.fromOffset(10, 0) lbl.BackgroundTransparency = 1 lbl.Font = Enum.Font.Code lbl.TextSize = 14 lbl.TextXAlignment = Enum.TextXAlignment.Left lbl.TextColor3 = THEME.Text lbl.Text = label lbl.Parent = row local pill = Instance.new("\070\114\097\109\101") pill.AnchorPoint = Vector2.new(1, 0.5) pill.Position = UDim2.new(1, -8, 0.5, 0) pill.Size = UDim2.fromOffset(40, 20) pill.BackgroundColor3 = THEME.Off pill.BorderSizePixel = 0 pill.Parent = row addCorner(pill, 10) local knob = Instance.new("\070\114\097\109\101") knob.AnchorPoint = Vector2.new(0, 0.5) knob.Size = UDim2.fromOffset(14, 14) knob.BackgroundColor3 = Color3.fromRGB(235, 235, 240) knob.BorderSizePixel = 0 knob.Parent = pill addCorner(knob, 7) local state = default and true or false local function render() pill.BackgroundColor3 = state and THEME.On or THEME.Off knob.Position = state and UDim2.new(1, -17, 0.5, 0) or UDim2.new(0, 3, 0.5, 0) end
+ pill.InputBegan:Connect( function (input) if input.UserInputType == Enum.UserInputType.MouseButton1 then state = not state render() pcall(onChange, state) end
+ end
+ ) render() pcall(onChange, state) return { Set = function (v: boolean) state = v and true or false render() end
+ , Get = function () return state end
+ , } end
+ local function createSlider( parent: Instance, label: string, min: number, max: number, default: number, onChange: (number) -> () ) local row = Instance.new("\070\114\097\109\101") row.Size = UDim2.new(1, 0, 0, 44) row.BackgroundColor3 = THEME.Row row.BorderSizePixel = 0 row.Parent = parent addCorner(row, 6) local lbl = Instance.new("\084\101\120\116\076\097\098\101\108") lbl.Size = UDim2.new(1, -60, 0, 20) lbl.Position = UDim2.fromOffset(10, 3) lbl.BackgroundTransparency = 1 lbl.Font = Enum.Font.Code lbl.TextSize = 14 lbl.TextXAlignment = Enum.TextXAlignment.Left lbl.TextColor3 = THEME.Text lbl.Text = label lbl.Parent = row local valueText = Instance.new("\084\101\120\116\076\097\098\101\108") valueText.AnchorPoint = Vector2.new(1, 0) valueText.Position = UDim2.new(1, -10, 0, 3) valueText.Size = UDim2.fromOffset(50, 20) valueText.BackgroundTransparency = 1 valueText.Font = Enum.Font.Code valueText.TextSize = 14 valueText.TextXAlignment = Enum.TextXAlignment.Right valueText.TextColor3 = THEME.Dim valueText.Parent = row local track = Instance.new("\070\114\097\109\101") track.AnchorPoint = Vector2.new(0, 0.5) track.Position = UDim2.new(0, 10, 1, -12) track.Size = UDim2.new(1, -20, 0, 6) track.BackgroundColor3 = THEME.Off track.BorderSizePixel = 0 track.Parent = row addCorner(track, 3) local fill = Instance.new("\070\114\097\109\101") fill.Size = UDim2.new(0, 0, 1, 0) fill.BackgroundColor3 = THEME.Accent fill.BorderSizePixel = 0 fill.Parent = track addCorner(fill, 3) local knob = Instance.new("\070\114\097\109\101") knob.AnchorPoint = Vector2.new(0.5, 0.5) knob.Size = UDim2.fromOffset(14, 14) knob.BackgroundColor3 = Color3.fromRGB(235, 235, 240) knob.BorderSizePixel = 0 knob.Parent = track addCorner(knob, 7) local value = math.clamp(default, min, max) local dragging = false local function render() local alpha = (value - min) / math.max(max - min, 1) fill.Size = UDim2.new(alpha, 0, 1, 0) knob.Position = UDim2.new(alpha, 0, 0.5, 0) valueText.Text = tostring(math.floor(value + 0.5)) end
+ local function setFromX(x: number) local alpha = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1) value = min + alpha * (max - min) render() pcall(onChange, value) end
+ track.InputBegan:Connect( function (input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true setFromX(UserInputService:GetMouseLocation().X) end
+ end
+ ) knob.InputBegan:Connect( function (input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true end
+ end
+ ) trackConnection(UserInputService.InputChanged:Connect( function (input) if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then setFromX(UserInputService:GetMouseLocation().X) end
+ end
+ )) trackConnection(UserInputService.InputEnded:Connect( function (input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+ end
+ )) render() pcall(onChange, value) return { Set = function (v: number) value = math.clamp(v, min, max) render() end
+ , Get = function () return value end
+ , } end
+ local PanelGui = makeGui("\083\105\108\101\110\116\065\105\109\080\097\110\101\108") local PanelFrame = Instance.new("\070\114\097\109\101") PanelFrame.Name = "\080\097\110\101\108" PanelFrame.AnchorPoint = Vector2.new(1, 0) PanelFrame.Position = UDim2.new(1, -12, 0, 12) PanelFrame.Size = UDim2.fromOffset(228, 40) PanelFrame.BackgroundColor3 = THEME.Bg PanelFrame.BackgroundTransparency = 0.05 PanelFrame.BorderSizePixel = 0 PanelFrame.Parent = PanelGui addCorner(PanelFrame, 10) addStroke(PanelFrame, THEME.Stroke, 1) local Title = Instance.new("\084\101\120\116\076\097\098\101\108") Title.Size = UDim2.new(1, 0, 0, 30) Title.BackgroundTransparency = 1 Title.Font = Enum.Font.Code Title.TextSize = 15 Title.TextColor3 = THEME.Text Title.Text = "\032\032\083\105\108\101\110\116\032\065\105\109" Title.TextXAlignment = Enum.TextXAlignment.Left Title.Parent = PanelFrame local Hint = Instance.new("\084\101\120\116\076\097\098\101\108") Hint.AnchorPoint = Vector2.new(1, 0) Hint.Position = UDim2.new(1, -10, 0, 0) Hint.Size = UDim2.fromOffset(60, 30) Hint.BackgroundTransparency = 1 Hint.Font = Enum.Font.Code Hint.TextSize = 11 Hint.TextColor3 = THEME.Dim Hint.Text = "\083\104\105\102\116\043\091" Hint.Parent = PanelFrame local Divider = Instance.new("\070\114\097\109\101") Divider.Size = UDim2.new(1, -20, 0, 1) Divider.Position = UDim2.new(0, 10, 0, 30) Divider.BackgroundColor3 = THEME.Stroke Divider.BorderSizePixel = 0 Divider.Parent = PanelFrame local Body = Instance.new("\070\114\097\109\101") Body.Name = "\066\111\100\121" Body.Position = UDim2.new(0, 10, 0, 36) Body.Size = UDim2.new(1, -20, 1, -46) Body.BackgroundTransparency = 1 Body.Parent = PanelFrame local Layout = Instance.new("\085\073\076\105\115\116\076\097\121\111\117\116") Layout.Padding = UDim.new(0, 6) Layout.SortOrder = Enum.SortOrder.LayoutOrder Layout.Parent = Body local ROWS_HEIGHT = (32 * 9) + (44 * 1) + (6 * 9) PanelFrame.Size = UDim2.fromOffset(228, 36 + ROWS_HEIGHT + 10) local IndicatorGui = makeGui("\083\105\108\101\110\116\065\105\109\073\110\100\105\099\097\116\111\114") local Indicator = Instance.new("\070\114\097\109\101") Indicator.Name = "\080\105\108\108" Indicator.AnchorPoint = Vector2.new(1, 0) Indicator.Position = UDim2.new(1, -12, 0, 12) Indicator.Size = UDim2.fromOffset(120, 26) Indicator.BackgroundColor3 = THEME.Bg Indicator.BackgroundTransparency = 0.05 Indicator.BorderSizePixel = 0 Indicator.Visible = false Indicator.Parent = IndicatorGui addCorner(Indicator, 13) addStroke(Indicator, THEME.On, 1.5) local Dot = Instance.new("\070\114\097\109\101") Dot.AnchorPoint = Vector2.new(0, 0.5) Dot.Position = UDim2.new(0, 10, 0.5, 0) Dot.Size = UDim2.fromOffset(9, 9) Dot.BackgroundColor3 = THEME.On Dot.BorderSizePixel = 0 Dot.Parent = Indicator addCorner(Dot, 5) local IndicatorText = Instance.new("\084\101\120\116\076\097\098\101\108") IndicatorText.Position = UDim2.new(0, 24, 0, 0) IndicatorText.Size = UDim2.new(1, -30, 1, 0) IndicatorText.BackgroundTransparency = 1 IndicatorText.Font = Enum.Font.Code IndicatorText.TextSize = 13 IndicatorText.TextXAlignment = Enum.TextXAlignment.Left IndicatorText.TextColor3 = THEME.Text IndicatorText.Text = "\083\105\108\101\110\116\032\097\105\109" IndicatorText.Parent = Indicator local function refreshIndicator() Indicator.Visible = Config.Enabled Indicator.Position = PanelGui.Enabled and UDim2.new(1, -12, 0, 12 + PanelFrame.AbsoluteSize.Y + 8) or UDim2.new(1, -12, 0, 12) end
+ local RingGui = makeGui("\083\105\108\101\110\116\065\105\109\070\079\086") local Ring = Instance.new("\070\114\097\109\101") Ring.Name = "\082\105\110\103" Ring.AnchorPoint = Vector2.new(0.5, 0.5) Ring.BackgroundColor3 = THEME.Accent Ring.BackgroundTransparency = 1 Ring.BorderSizePixel = 0 Ring.Parent = RingGui addCorner(Ring, 999) local RingStroke = Instance.new("\085\073\083\116\114\111\107\101") RingStroke.Color = Config.FOVColor RingStroke.Thickness = Config.FOVThickness RingStroke.Transparency = 0 RingStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border RingStroke.Parent = Ring local ToggleSilent, ToggleTeam, ToggleFOV, ToggleWall, ToggleESP local ToggleItem, ToggleSlots, ToggleInv, ToggleLaser local espSetEnabled: (boolean) -> () local itemESPSetEnabled: (boolean) -> () local eisSetEnabled: (boolean) -> () local invGUISetEnabled: (boolean) -> () local laserSetEnabled: (boolean) -> () ToggleSilent = createToggle(Body, "\083\105\108\101\110\116\032\097\105\109", Config.Enabled, function (v) Config.Enabled = v refreshIndicator() end
+ ) ToggleTeam = createToggle(Body, "\084\101\097\109\032\099\104\101\099\107", Config.TeamCheck, function (v) Config.TeamCheck = v end
+ ) ToggleFOV = createToggle(Body, "\070\079\086\032\099\105\114\099\108\101", Config.ShowFOV, function (v) Config.ShowFOV = v end
+ ) ToggleWall = createToggle(Body, "\087\097\108\108\032\099\104\101\099\107", Config.WallCheck, function (v) Config.WallCheck = v end
+ ) ToggleESP = createToggle(Body, "\080\108\097\121\101\114\032\069\083\080", Config.PlayerESP, function (v) Config.PlayerESP = v pcall(espSetEnabled, v) end
+ ) ToggleItem = createToggle(Body, "\073\116\101\109\032\069\083\080", Config.ItemESP, function (v) Config.ItemESP = v pcall(itemESPSetEnabled, v) end
+ ) ToggleSlots = createToggle(Body, "\069\120\116\114\097\032\115\108\111\116\115", Config.ExtraSlots, function (v) Config.ExtraSlots = v pcall(eisSetEnabled, v) end
+ ) ToggleLaser = createToggle(Body, "\076\097\115\101\114\032\115\105\103\104\116", Config.LaserSight, function (v) Config.LaserSight = v pcall(laserSetEnabled, v) end
+ ) local SliderFOV = createSlider(Body, "\070\079\086\032\115\105\122\101", Config.FOVMin, Config.FOVMax, Config.FOV, function (v) Config.FOV = v end
+ ) local function setEnabled(v: boolean) Config.Enabled = v and true or false ToggleSilent.Set(Config.Enabled) refreshIndicator() end
+ local function setPanelVisible(v: boolean) PanelGui.Enabled = v refreshIndicator() end
+ setPanelVisible(false) local function getAimPoint(): Vector2 if Config.FOVAnchor == "\109\111\117\115\101" then local ok, pos = pcall( function () return UserInputService:GetMouseLocation() end
+ ) if ok and typeof(pos) == "\086\101\099\116\111\114\050" then return pos end
+ end
+ if Camera then return Camera.ViewportSize / 2 end
+ return Vector2.new(0, 0) end
+ local function isEligible(player: Player): (boolean, Model?) if player == LocalPlayer then return false, nil end
+ if Config.TeamCheck and isSameTeam(player) then return false, nil end
+ local char = player.Character if not char then return false, nil end
+ local hum = char:FindFirstChildOfClass("\072\117\109\097\110\111\105\100") if not hum then return false, nil end
+ if Config.AliveCheck and hum.Health <= 0 then return false, nil end
+ if Config.IgnoreForceField and char:FindFirstChildOfClass("\070\111\114\099\101\070\105\101\108\100") then return false, nil end
+ if not char:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116") then return false, nil end
+ return true, char end
+ local function getBestTarget(): (BasePart?, Model?) local camPos = Camera.CFrame.Position local aimPoint = getAimPoint() local mode = currentAimMode() if mode ~= "\067\108\111\115\101\115\116" then for _, player in ipairs(Players:GetPlayers()) do local ok, char = isEligible(player) if ok and char then local root = char:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116") :: BasePart if (root.Position - camPos).Magnitude <= Config.MaxDistance then local part = char:FindFirstChild(mode) if part and part:IsA("\066\097\115\101\080\097\114\116") then local vp, onScreen = Camera:WorldToViewportPoint(part.Position) if onScreen then local d = (Vector2.new(vp.X, vp.Y) - aimPoint).Magnitude if d <= Config.FOV then return part, char end
+ end
+ end
+ end
+ end
+ end
+ end
+ local bestPart: BasePart? = nil local bestChar: Model? = nil local bestDist = Config.FOV for _, player in ipairs(Players:GetPlayers()) do local ok, char = isEligible(player) if ok and char then local root = char:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116") :: BasePart if (root.Position - camPos).Magnitude <= Config.MaxDistance then for _, partName in ipairs(Config.AimParts) do local part = char:FindFirstChild(partName) if part and part:IsA("\066\097\115\101\080\097\114\116") then local vp, onScreen = Camera:WorldToViewportPoint(part.Position) if onScreen then local d = (Vector2.new(vp.X, vp.Y) - aimPoint).Magnitude if d <= bestDist then bestDist = d bestPart = part bestChar = char end
+ end
+ end
+ end
+ end
+ end
+ end
+ return bestPart, bestChar end
+ local function cloneParams(params: RaycastParams?): RaycastParams local p = RaycastParams.new() if params then p.FilterType = params.FilterType p.FilterDescendantsInstances = params.FilterDescendantsInstances p.IgnoreWater = params.IgnoreWater p.CollisionGroup = params.CollisionGroup end
+ if p.FilterType == Enum.RaycastFilterType.Exclude then local list = table.clone(p.FilterDescendantsInstances) if LocalPlayer.Character then table.insert(list, LocalPlayer.Character) end
+ p.FilterDescendantsInstances = list end
+ return p end
+ local function nearLocalRig(origin: Vector3): boolean if (origin - Camera.CFrame.Position).Magnitude <= Config.MaxOriginDistance then return true end
+ local char = LocalPlayer.Character local root = char and char:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116") return root ~= nil and (origin - (root :: BasePart).Position).Magnitude <= Config.MaxOriginDistance end
+ local function hasLineOfSight(origin: Vector3, targetPart: BasePart, targetChar: Model?, params: RaycastParams?, filterFunc: any): boolean if not Config.WallCheck or not OriginalRaycast then return true end
+ local dir = targetPart.Position - origin if dir.Magnitude == 0 then return true end
+ local hit = OriginalRaycast(origin, dir, cloneParams(params), filterFunc, false) if not hit then return true end
+ return hit.Instance == targetPart or (targetChar ~= nil and hit.Instance:IsDescendantOf(targetChar)) end
+ local lastRedirectPart: BasePart? = nil local function buildRedirect(origin: Vector3, direction: Vector3, params: RaycastParams?, filterFunc: any, keepMagnitude: boolean): Vector3? if not Config.Enabled then return nil end
+ if not nearLocalRig(origin) then return nil end
+ if direction.Magnitude > 0 then local dirUnit = direction.Unit local cosLimit = math.cos(math.rad(Config.MaxBendAngle)) local anyNear = false for _, plr in ipairs(Players:GetPlayers()) do local char = plr.Character local root = char and char:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116") if root then local toTarget = (root :: BasePart).Position - origin if toTarget.Magnitude > 0 and dirUnit:Dot(toTarget.Unit) >= cosLimit then anyNear = true break end
+ end
+ end
+ if not anyNear then return nil end
+ end
+ local targetPart, targetChar = getBestTarget() if not targetPart then return nil end
+ local desired = targetPart.Position - origin local mag = desired.Magnitude if mag == 0 then return nil end
+ if direction.Magnitude > 0 then local angle = math.deg(math.acos(math.clamp(direction.Unit:Dot(desired.Unit), -1, 1))) if angle > Config.MaxBendAngle then return nil end
+ end
+ if not hasLineOfSight(origin, targetPart, targetChar, params, filterFunc) then return nil end
+ lastRedirectPart = targetPart if keepMagnitude then return desired.Unit * direction.Magnitude end
+ return desired.Unit * math.max(direction.Magnitude, mag) end
+ local activeRays = {} local MAX_ACTIVE_RAYS = 24 local lastDrawAt, lastDrawFrom, lastDrawTo = -1, nil, nil local lastRayWarnAt = 0 local function warnRayFailure(err: any) local now = os.clock() if now - lastRayWarnAt > 5 then lastRayWarnAt = now end
+ end
+ local function drawRayBetween(fromPos: Vector3, toPos: Vector3) if not Config.ShowHitRay then return end
+ if #activeRays >= MAX_ACTIVE_RAYS then return end
+ local now = os.clock() if now - lastDrawAt < 0.1 and lastDrawFrom == fromPos and lastDrawTo == toPos then return end
+ local okDraw, err = pcall( function () local holder = Instance.new("\080\097\114\116") holder.Name = "\083\105\108\101\110\116\065\105\109\082\097\121" holder.Anchored = true holder.CanCollide = false holder.CanQuery = false holder.CanTouch = false holder.Transparency = 1 holder.Size = Vector3.new(0.1, 0.1, 0.1) holder.CFrame = CFrame.new(fromPos) holder.Parent = workspace local attachment0 = Instance.new("\065\116\116\097\099\104\109\101\110\116") attachment0.Parent = holder local attachment1 = Instance.new("\065\116\116\097\099\104\109\101\110\116") attachment1.Parent = holder attachment1.WorldPosition = toPos local beam = Instance.new("\066\101\097\109") beam.Attachment0 = attachment0 beam.Attachment1 = attachment1 beam.FaceCamera = true beam.Enabled = true beam.Width0 = 0.12 beam.Width1 = 0.3 beam.LightEmission = 1 beam.Color = ColorSequence.new(Config.RayColor) beam.Parent = holder local marker = Instance.new("\080\097\114\116") marker.Name = "\083\105\108\101\110\116\065\105\109\072\105\116\077\097\114\107\101\114" marker.Shape = Enum.PartType.Ball marker.Size = Vector3.new(0.4, 0.4, 0.4) marker.Material = Enum.Material.Neon marker.Color = Config.RayColor marker.Anchored = true marker.CanCollide = false marker.CanQuery = false marker.CanTouch = false marker.CFrame = CFrame.new(toPos) marker.Parent = workspace table.insert(activeRays, { holder = holder, marker = marker, born = now }) Debris:AddItem(holder, Config.RayTime) Debris:AddItem(marker, Config.RayTime) lastDrawAt, lastDrawFrom, lastDrawTo = now, fromPos, toPos end
+ ) if not okDraw then warnRayFailure(err) end
+ end
+ local function playerHitNear(pos: Vector3, radius: number): boolean for _, plr in ipairs(Players:GetPlayers()) do local char = plr.Character if plr ~= LocalPlayer and char then for _, d in ipairs(char:GetDescendants()) do if d:IsA("\066\097\115\101\080\097\114\116") and (d.Position - pos).Magnitude <= radius then return true end
+ end
+ end
+ end
+ return false end
+ local function drawRayFromResult(origin: Vector3, result: any): (boolean, boolean) if result == nil then return false, false end
+ local okGet, hitInstance, hitPos = pcall( function () return result.Instance, result.Position end
+ ) if not okGet or typeof(hitInstance) ~= "\073\110\115\116\097\110\099\101" or typeof(hitPos) ~= "\086\101\099\116\111\114\051" then return false, false end
+ local hitPlayer = false for _, plr in ipairs(Players:GetPlayers()) do local char = plr.Character if plr ~= LocalPlayer and char and hitInstance:IsDescendantOf(char) then hitPlayer = true break end
+ end
+ if not hitPlayer then return false, true end
+ drawRayBetween(origin, hitPos) return true, true end
+ local function pruneRays() local now = os.clock() for i = #activeRays, 1, -1 do local entry = activeRays[i] if entry.holder.Parent == nil and entry.marker.Parent == nil then table.remove(activeRays, i) elseif now - entry.born > Config.RayTime + 1 then pcall( function () entry.holder:Destroy() entry.marker:Destroy() end
+ ) table.remove(activeRays, i) end
+ end
+ end
+ local ESP = { running = false, espByPlayer = {}, connections = {}, } local function espDarken(color: Color3): Color3 local m = Config.ESP.TeamColorMultiplier return Color3.new(color.R * m, color.G * m, color.B * m) end
+ local function espTeamColor(player: Player): Color3 local team = getPlayerTeam(player) local color = team and TEAMCOLORS[team] if not color then return Color3.fromRGB(24, 24, 24) end
+ return espDarken(color) end
+ local function espIsAllowed(player: Player): boolean if player == LocalPlayer then return false end
+ local myTeam = getPlayerTeam(LocalPlayer) local theirTeam = getPlayerTeam(player) if myTeam and theirTeam and myTeam == theirTeam then return Config.ESP.ShowTeammates end
+ return Config.ESP.ShowEnemies end
+ local function espDamageColor(limb: any, isDead: boolean): (Color3?, number) if isDead or not limb or type(limb.Health) ~= "\110\117\109\098\101\114" or limb.Health <= 0 then return Color3.new(0, 0, 0), 0.20 end
+ if type(limb.MaxHealth) ~= "\110\117\109\098\101\114" or limb.MaxHealth <= 0 then return nil, 1 end
+ local ratio = math.clamp(limb.Health / limb.MaxHealth, 0, 1) if ratio >= 1 then return nil, 1 end
+ local color = Color3.fromRGB(100, 70, 25):Lerp(Color3.fromRGB(100, 30, 30), 1 - ratio) return color, 0.20 end
+ local function espGetRig(player: Player, character: Model): (any?, any?) if not World then return nil, nil end
+ local okHas, hasFn = pcall( function () return type(World.GetEntitiesWithComponent) == "\102\117\110\099\116\105\111\110" end
+ ) if not okHas or not hasFn then return nil, nil end
+ local ok, entities = pcall( function () return World.GetEntitiesWithComponent("\068\097\109\097\103\101\082\105\103") end
+ ) if not ok or type(entities) ~= "\116\097\098\108\101" then return nil, nil end
+ for entityId, entity in pairs(entities) do if entity and entity.Player and entity.Player.Instance == player and entity.DamageRig then return entityId, entity.DamageRig end
+ end
+ local torso = character:FindFirstChild("\084\111\114\115\111") local root = character:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116") for entityId, entity in pairs(entities) do local rig = entity and entity.DamageRig if rig and rig.Limbs then for _, limb in pairs(rig.Limbs) do if limb.Instance and (limb.Instance == torso or limb.Instance == root) then return entityId, rig end
+ end
+ end
+ end
+ return nil, nil end
+ local PART_SLOTS = { Head = "\072\101\097\100", Torso = "\084\111\114\115\111", UpperTorso = "\084\111\114\115\111", LowerTorso = "\084\111\114\115\111", LeftUpperArm = "\076\065\114\109", LeftArm = "\076\065\114\109", RightUpperArm = "\082\065\114\109", RightArm = "\082\065\114\109", LeftUpperLeg = "\076\076\101\103", LeftLeg = "\076\076\101\103", RightUpperLeg = "\082\076\101\103", RightLeg = "\082\076\101\103", } local function espBuildFallbackLimbs(character: Model): { [string]: any } local limbs = {} for name, slot in pairs(PART_SLOTS) do local part = character:FindFirstChild(name) if part and part:IsA("\066\097\115\101\080\097\114\116") and not limbs[slot] then limbs[slot] = { Instance = part, __fallback = true } end
+ end
+ return limbs end
+ local function espRemove(player: Player) local state = ESP.espByPlayer[player] if not state then return end
+ for _, highlight in pairs(state.highlights) do if highlight then pcall( function () highlight:Destroy() end
+ ) end
+ end
+ ESP.espByPlayer[player] = nil end
+ local function espRemoveAll() for player in pairs(ESP.espByPlayer) do espRemove(player) end
+ end
+ local ESP_LIMB_ORDER = { "\072\101\097\100", "\084\111\114\115\111", "\076\065\114\109", "\082\065\114\109", "\076\076\101\103", "\082\076\101\103" } local function espUpdatePlayer(player: Player) if not ESP.running then return end
+ if not espIsAllowed(player) then espRemove(player) return end
+ local character = player.Character if not character or not character.Parent then espRemove(player) return end
+ local humanoid = character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100") if not humanoid then espRemove(player) return end
+ local entityId, rig = espGetRig(player, character) local limbMap if rig and rig.Limbs then limbMap = rig.Limbs else limbMap = espBuildFallbackLimbs(character) for _, limb in pairs(limbMap) do limb.Health = humanoid.Health limb.MaxHealth = humanoid.MaxHealth end
+ end
+ local characterDead = (rig and rig.Dead == true) or humanoid.Health <= 0 local state = ESP.espByPlayer[player] if not state or state.character ~= character then espRemove(player) state = { character = character, entityId = entityId, highlights = {} } ESP.espByPlayer[player] = state end
+ state.entityId = entityId local teamColor = espTeamColor(player) local activeParts = {} for _, limbName in ipairs(ESP_LIMB_ORDER) do local limb = limbMap[limbName] local part = limb and limb.Instance if part and part:IsA("\066\097\115\101\080\097\114\116") and part:IsDescendantOf(character) then activeParts[part] = true local highlight = state.highlights[part] if not highlight or not highlight.Parent then highlight = Instance.new("\072\105\103\104\108\105\103\104\116") highlight.Name = "\068\097\109\097\103\101\082\105\103\095\080\108\097\121\101\114\069\083\080" highlight.Adornee = part highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop highlight.FillTransparency = Config.ESP.FillTransparency highlight.Parent = character state.highlights[part] = highlight end
+ highlight.OutlineColor = teamColor highlight.OutlineTransparency = Config.ESP.OutlineTransparency local fillColor, fillTransparency = espDamageColor(limb, characterDead) if fillColor then highlight.FillColor = fillColor end
+ highlight.FillTransparency = fillTransparency end
+ end
+ for part, highlight in pairs(state.highlights) do if not activeParts[part] or not part:IsDescendantOf(character) then pcall( function () highlight:Destroy() end
+ ) state.highlights[part] = nil end
+ end
+ end
+ local function espUpdateAll() local now = os.clock() for _, player in ipairs(Players:GetPlayers()) do if player ~= LocalPlayer then local ok, err = pcall(espUpdatePlayer, player) if not ok and now - (ESP.lastWarnAt or 0) > 5 then ESP.lastWarnAt = now end
+ end
+ end
+ end
+ local function espWatchCharacter(player: Player) table.insert( ESP.connections, player.CharacterAdded:Connect( function () playerTeamCache[player] = nil espRemove(player) end
+ ) ) table.insert( ESP.connections, player.CharacterRemoving:Connect( function () espRemove(player) end
+ ) ) end
+ local function espStart() if ESP.running then return end
+ ESP.running = true table.insert(ESP.connections, Players.PlayerAdded:Connect(espWatchCharacter)) table.insert( ESP.connections, Players.PlayerRemoving:Connect( function (player) playerTeamCache[player] = nil espRemove(player) end
+ ) ) for _, player in ipairs(Players:GetPlayers()) do espWatchCharacter(player) end
+ task.spawn( function () while ESP.running do espUpdateAll() task.wait(Config.ESP.UpdateInterval) end
+ end
+ ) espUpdateAll() end
+ local function espStop() if not ESP.running then return end
+ ESP.running = false for _, conn in ipairs(ESP.connections) do pcall( function () conn:Disconnect() end
+ ) end
+ table.clear(ESP.connections) espRemoveAll() end
+ State.ESPStop = espStop espSetEnabled = function (v: boolean) Config.PlayerESP = v and true or false if Config.PlayerESP then espStart() else espStop() end
+ end
+ local ItemCfg = { UpdateInterval = 0.25, MaxDistance = 1500, TextSize = 16, LabelOffset = Vector3.new(0, 0, 0), Items = { Disk = { Label = "\080\074", Color = Color3.fromRGB(0, 25, 115) }, Cash = { Label = "\036", Color = Color3.fromRGB(0, 25, 115) }, FakeCash = { Label = "\070\036", Color = Color3.fromRGB(255, 35, 35) }, Gavel = { Label = "\071\065\086\069\076", Color = Color3.fromRGB(0, 25, 115) }, Bottle = { Label = "\083\069\076\084\090\069\082", Color = Color3.fromRGB(0, 25, 115) }, }, } local ITEM_GUI_NAME = "\095\073\116\101\109\077\111\100\101\108\069\083\080" local ItemESP = { running = false, loopAlive = false, conns = {}, tracked = {} } local function itemAdornee(item: Instance): BasePart? if item:IsA("\066\097\115\101\080\097\114\116") then return item end
+ if item:IsA("\077\111\100\101\108") then return item.PrimaryPart or item:FindFirstChildWhichIsA("\066\097\115\101\080\097\114\116", true) end
+ return item:FindFirstChildWhichIsA("\066\097\115\101\080\097\114\116", true) end
+ local function itemRemove(item: Instance) local entry = ItemESP.tracked[item] if entry then if entry.Billboard then pcall( function () entry.Billboard:Destroy() end
+ ) end
+ ItemESP.tracked[item] = nil end
+ end
+ local function itemMake(item: Instance) local cfg = ItemCfg.Items[item.Name] if not cfg then return end
+ local adornee = itemAdornee(item) if not adornee then return end
+ local old = item:FindFirstChild(ITEM_GUI_NAME) if old then old:Destroy() end
+ local billboard = Instance.new("\066\105\108\108\098\111\097\114\100\071\117\105") billboard.Name = ITEM_GUI_NAME billboard.Adornee = adornee billboard.AlwaysOnTop = true billboard.LightInfluence = 0 billboard.Size = UDim2.fromOffset(150, 32) billboard.StudsOffsetWorldSpace = ItemCfg.LabelOffset billboard.MaxDistance = ItemCfg.MaxDistance billboard.Parent = item local label = Instance.new("\084\101\120\116\076\097\098\101\108") label.Name = "\073\116\101\109\076\097\098\101\108" label.BackgroundTransparency = 1 label.Size = UDim2.fromScale(1, 1) label.Font = Enum.Font.Arcade label.Text = cfg.Label label.TextSize = ItemCfg.TextSize label.TextColor3 = cfg.Color label.TextStrokeColor3 = Color3.new(0, 0, 0) label.TextStrokeTransparency = 0 label.Parent = billboard ItemESP.tracked[item] = { Billboard = billboard, Adornee = adornee } end
+ local function itemScan(item: Instance) if ItemCfg.Items[item.Name] and not ItemESP.tracked[item] then itemMake(item) end
+ end
+ local function itemStop() ItemESP.running = false for item in pairs(ItemESP.tracked) do itemRemove(item) end
+ for _, conn in ipairs(ItemESP.conns) do pcall( function () conn:Disconnect() end
+ ) end
+ table.clear(ItemESP.conns) end
+ State.ItemStop = itemStop local function itemStart() if ItemESP.running then return end
+ ItemESP.running = true if #ItemESP.conns == 0 then table.insert( ItemESP.conns, workspace.DescendantAdded:Connect( function (item) if ItemESP.running and ItemCfg.Items[item.Name] then task.defer(itemScan, item) end
+ end
+ ) ) table.insert( ItemESP.conns, workspace.DescendantRemoving:Connect( function (item) itemRemove(item) end
+ ) ) end
+ for _, item in ipairs(workspace:GetDescendants()) do itemScan(item) end
+ if not ItemESP.loopAlive then ItemESP.loopAlive = true task.spawn( function () while ItemESP.running do for item in pairs(ItemESP.tracked) do if not item:IsDescendantOf(workspace) then itemRemove(item) else local entry = ItemESP.tracked[item] local adornee = itemAdornee(item) if not adornee then itemRemove(item) elseif entry and adornee ~= entry.Adornee then itemRemove(item) itemMake(item) end
+ end
+ end
+ task.wait(ItemCfg.UpdateInterval) end
+ ItemESP.loopAlive = false end
+ ) end
+ local n = 0 for _ in pairs(ItemESP.tracked) do n = n + 1 end
+ end
+ itemESPSetEnabled = function (v: boolean) Config.ItemESP = v and true or false if Config.ItemESP then itemStart() else itemStop() end
+ end
+ if Config.ItemESP then itemStart() end
+ local EISCfg = { ExtraSlots = 6, MaxTotal = 9, ApplyInterval = 0.3, PerfPrint = false, ToggleKey = Config.SlotsKey, } local EIS_MIN, EIS_MAX = 6, 9 State.EISToken = {} local MyEISToken = State.EISToken local eisPatch, eisRevert, eisStoreCount = 0, 0, 0 local SwapHoldable = nil do local ok, res = pcall( function () local remotes = ReplicatedStorage:WaitForChild("\082\101\109\111\116\101\115", 20) local toServer = remotes and remotes:WaitForChild("\084\111\083\101\114\118\101\114", 15) local remote = toServer and toServer:WaitForChild("\083\119\097\112\072\111\108\100\097\098\108\101", 15) if not remote then error("\083\119\097\112\072\111\108\100\097\098\108\101\032\110\111\116\032\102\111\117\110\100") end
+ return remote end
+ ) if ok and res then SwapHoldable = res else end
+ end
+ local handsModulePresent = false do local clientFolder = ReplicatedStorage:FindFirstChild("\067\108\105\101\110\116") handsModulePresent = clientFolder ~= nil and clientFolder:FindFirstChild("\099\072\097\110\100\115\073\110\118\101\110\116\111\114\121") ~= nil end
+ local function computeDesired(base: number): number local extra = math.clamp(EISCfg.ExtraSlots, EIS_MIN, EIS_MAX) local want = base + extra if EISCfg.MaxTotal and EISCfg.MaxTotal > 0 then want = math.min(want, math.max(EISCfg.MaxTotal, base)) end
+ return math.max(want, base) end
+ local eisWarnedCollisions = false local function warnKeyCollisions(total: number) if eisWarnedCollisions or total < 11 then return end
+ eisWarnedCollisions = true end
+ local function getCharEntityFull(): (any, any, any) if World_m == nil then return nil, nil, nil end
+ local ok, entId, ent, comp = pcall( function () local pid = World_m.LocalEntityId if pid == nil then return nil, nil, nil end
+ local pe = World_m.get(pid) if type(pe) ~= "\116\097\098\108\101" or type(pe.Player) ~= "\116\097\098\108\101" or pe.Player.CharacterControlling == nil then return nil, nil, nil end
+ local cid = pe.Player.CharacterControlling local ce = World_m.get(cid) local cc = ce and ce.Character if type(cc) ~= "\116\097\098\108\101" or type(cc.MaxInventory) ~= "\110\117\109\098\101\114" then return nil, nil, nil end
+ return cid, ce, cc end
+ ) if not ok then return nil, nil, nil end
+ return entId, ent, comp end
+ local appliedEntity, appliedValue, baseValue = nil, nil, nil local lastPatchLogAt, lastPatchWarnAt = 0, 0 local function ensureSlots(): boolean local charEntityId, _, comp = getCharEntityFull() if charEntityId == nil or comp == nil then return false end
+ local cur = comp.MaxInventory :: number local desired: number if charEntityId ~= appliedEntity then appliedEntity = charEntityId baseValue = cur desired = computeDesired(cur) elseif cur ~= appliedValue then baseValue = cur desired = computeDesired(cur) eisRevert = eisRevert + 1 else desired = appliedValue return true end
+ if desired <= cur then return true end
+ appliedValue = desired local ok, err = pcall( function () World_m.patch(charEntityId, { Character = { MaxInventory = desired } }) end
+ ) if not ok then return false end
+ local _, _, readComp = getCharEntityFull() local readBack = readComp and readComp.MaxInventory if readBack == desired then eisPatch = eisPatch + 1 local now = os.clock() if now - lastPatchLogAt > 0.5 then lastPatchLogAt = now warnKeyCollisions(desired) end
+ return true end
+ local now = os.clock() if now - lastPatchWarnAt > 5 then lastPatchWarnAt = now end
+ return false end
+ local function Store(slot: number, useLeftHand: boolean?): (boolean, string?) if type(slot) ~= "\110\117\109\098\101\114" then return false, "\115\108\111\116\032\109\117\115\116\032\098\101\032\097\032\110\117\109\098\101\114" end
+ slot = math.floor(slot) if SwapHoldable == nil then return false, "\083\119\097\112\072\111\108\100\097\098\108\101\032\114\101\109\111\116\101\032\109\105\115\115\105\110\103" end
+ ensureSlots() local _, _, comp = getCharEntityFull() if comp == nil then return false, "\110\111\032\067\104\097\114\097\099\116\101\114\032\099\111\109\112\111\110\101\110\116\032\040\110\111\116\032\115\112\097\119\110\101\100\063\041" end
+ if slot < 1 or slot > (comp.MaxInventory :: number) then return false, string.format("\115\108\111\116\032\037\100\032\111\117\116\032\111\102\032\114\097\110\103\101\032\040\077\097\120\073\110\118\101\110\116\111\114\121\061\037\100\041", slot, comp.MaxInventory) end
+ local shift = useLeftHand if shift == nil then shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) end
+ SwapHoldable:FireServer(shift, slot) eisStoreCount = eisStoreCount + 1 return true, nil end
+ local function EISInfo() local charEntityId, _, comp = getCharEntityFull() return { entityId = charEntityId, base = baseValue, desired = appliedValue, maxInventory = comp and comp.MaxInventory or nil, extraSlots = math.clamp(EISCfg.ExtraSlots, EIS_MIN, EIS_MAX), } end
+ eisSetEnabled = function (v: boolean) Config.ExtraSlots = v and true or false if Config.ExtraSlots then pcall(ensureSlots) end
+ end
+ task.spawn( function () while task.wait(EISCfg.ApplyInterval) do if State.EISToken ~= MyEISToken then return end
+ if Config.ExtraSlots and World_m ~= nil then pcall(ensureSlots) end
+ end
+ end
+ ) if Config.ExtraSlots then task.defer( function () pcall(ensureSlots) end
+ ) end
+ local slotsPending, slotsOther = false, false trackConnection(UserInputService.InputBegan:Connect( function (input, gameProcessed) if input.KeyCode == EISCfg.ToggleKey then if not gameProcessed then slotsPending = true slotsOther = false end
+ elseif slotsPending then slotsOther = true end
+ end
+ )) trackConnection(UserInputService.InputEnded:Connect( function (input) if input.KeyCode ~= EISCfg.ToggleKey then return end
+ local shouldToggle = slotsPending and not slotsOther slotsPending, slotsOther = false, false if shouldToggle then Config.ExtraSlots = not Config.ExtraSlots ToggleSlots.Set(Config.ExtraSlots) eisSetEnabled(Config.ExtraSlots) end
+ end
+ )) task.spawn( function () while task.wait(10) do if State.EISToken ~= MyEISToken then return end
+ if EISCfg.PerfPrint then local _, _, comp = getCharEntityFull() end
+ eisPatch, eisRevert, eisStoreCount = 0, 0, 0 end
+ end
+ ) pcall( function () local env = (getgenv and getgenv()) or _G env.ExtraInventorySlotsConfig = EISCfg local eis = env.ExtraInventorySlots if type(eis) ~= "\116\097\098\108\101" then eis = {} env.ExtraInventorySlots = eis end
+ eis.Store = Store eis.Info = EISInfo eis.Ensure = ensureSlots end
+ ) if World_m == nil then end
+ local BlueprintNames = {} do local ok, blueprints = pcall( function () local shared = ReplicatedStorage:WaitForChild("\083\104\097\114\101\100", 10) return require(shared:WaitForChild("\069\110\116\105\116\121\066\108\117\101\112\114\105\110\116\115", 10)) end
+ ) if ok and type(blueprints) == "\116\097\098\108\101" then local n = 0 local function index(k: any, display: string) if type(k) == "\115\116\114\105\110\103" and #k > 0 and BlueprintNames[k:lower()] == nil then BlueprintNames[k:lower()] = display n = n + 1 end
+ end
+ for _, sectionName in ipairs({ "\087\101\097\112\111\110\115", "\077\101\108\101\101", "\073\116\101\109\115", "\070\111\111\100", "\065\109\109\111" }) do local section = blueprints[sectionName] if type(section) == "\116\097\098\108\101" then for key, bp in pairs(section) do if type(bp) == "\116\097\098\108\101" then local display = nil if type(bp.MarketItem) == "\116\097\098\108\101" and type(bp.MarketItem.Name) == "\115\116\114\105\110\103" and #bp.MarketItem.Name > 0 then display = bp.MarketItem.Name elseif type(bp.Holdable) == "\116\097\098\108\101" and type(bp.Holdable.Name) == "\115\116\114\105\110\103" and #bp.Holdable.Name > 0 then display = bp.Holdable.Name elseif type(bp.Name) == "\115\116\114\105\110\103" and #bp.Name > 0 then display = bp.Name elseif type(key) == "\115\116\114\105\110\103" then display = key end
+ if display then index(key, display) if type(bp.MarketItem) == "\116\097\098\108\101" then index(bp.MarketItem.Name, display) end
+ if type(bp.Holdable) == "\116\097\098\108\101" then index(bp.Holdable.Name, display) end
+ index(bp.Name, display) pcall( function () local inst = bp.Model and bp.Model.Instance if typeof(inst) == "\073\110\115\116\097\110\099\101" then index(inst.Name, display) end
+ end
+ ) end
+ end
+ end
+ end
+ end
+ else end
+ end
+ local function blueprintName(s: any): string? if type(s) ~= "\115\116\114\105\110\103" or #s == 0 then return nil end
+ return BlueprintNames[s:lower()] end
+ local InvCfg = { UpdateInterval = 0.15, MaxSlots = 4, SlotSize = 72, Gap = 6 } local InvGui = makeGui("\083\105\108\101\110\116\065\105\109\073\110\118") InvGui.Enabled = Config.SlotGUI and true or false local barWidth = InvCfg.MaxSlots * InvCfg.SlotSize + (InvCfg.MaxSlots - 1) * InvCfg.Gap local InvBar = Instance.new("\070\114\097\109\101") InvBar.Name = "\072\111\116\098\097\114" InvBar.AnchorPoint = Vector2.new(1, 1) InvBar.Position = UDim2.new(1, -16, 1, -16) InvBar.Size = UDim2.fromOffset( InvCfg.SlotSize, InvCfg.MaxSlots * InvCfg.SlotSize + (InvCfg.MaxSlots - 1) * InvCfg.Gap ) InvBar.BackgroundTransparency = 1 InvBar.Parent = InvGui local InvStatus = Instance.new("\084\101\120\116\076\097\098\101\108") InvStatus.Size = UDim2.new(1, 0, 0, 12) InvStatus.Position = UDim2.new(0, 0, 0, -16) InvStatus.BackgroundTransparency = 1 InvStatus.Font = Enum.Font.Code InvStatus.TextSize = 10 InvStatus.TextColor3 = THEME.Dim InvStatus.Text = "\119\097\105\116\105\110\103\032\102\111\114\032\087\111\114\108\100\046\046\046" InvStatus.Parent = InvBar InvStatus.Visible = false local InvRow = Instance.new("\070\114\097\109\101") InvRow.Size = UDim2.new(1, 0, 1, 0) InvRow.BackgroundTransparency = 1 InvRow.Parent = InvBar local InvLayout = Instance.new("\085\073\076\105\115\116\076\097\121\111\117\116") InvLayout.FillDirection = Enum.FillDirection.Vertical InvLayout.Padding = UDim.new(0, InvCfg.Gap) InvLayout.SortOrder = Enum.SortOrder.LayoutOrder InvLayout.Parent = InvRow local invRows = {} local function invRebuild() for _, row in pairs(invRows) do if type(row) == "\116\097\098\108\101" then local frame = row.Frame if frame and frame.Parent then pcall( function () frame:Destroy() end
+ ) end
+ end
+ end
+ table.clear(invRows) for i = 1, InvCfg.MaxSlots do local box = Instance.new("\070\114\097\109\101") box.Size = UDim2.fromOffset(InvCfg.SlotSize, InvCfg.SlotSize) box.BackgroundColor3 = THEME.Bg box.BackgroundTransparency = 1 box.BorderSizePixel = 0 box.LayoutOrder = i box.Parent = InvRow addCorner(box, 8) addStroke(box, THEME.Stroke, 1) local num = Instance.new("\084\101\120\116\076\097\098\101\108") num.Size = UDim2.fromOffset(16, 12) num.Position = UDim2.fromOffset(5, 2) num.BackgroundTransparency = 1 num.Font = Enum.Font.Code num.TextSize = 10 num.TextXAlignment = Enum.TextXAlignment.Left num.TextColor3 = THEME.Dim num.Text = tostring(i + 5) num.Parent = box local name = Instance.new("\084\101\120\116\076\097\098\101\108") name.Size = UDim2.new(1, -6, 0, 20) name.Position = UDim2.new(0, 3, 1, -22) name.BackgroundTransparency = 1 name.TextXAlignment = Enum.TextXAlignment.Center name.TextYAlignment = Enum.TextYAlignment.Center name.ZIndex = box.ZIndex + 2 name.Font = Enum.Font.Code name.TextSize = 11 name.TextWrapped = true name.TextColor3 = THEME.Dim name.Text = "" name.Parent = box name.Visible = true name.TextScaled = true name.TextWrapped = true table.insert(invRows, { Frame = box, Name = name }) end
+ end
+ invRebuild() local function looksSlotKey(k: any): boolean if type(k) == "\110\117\109\098\101\114" then return k >= 1 and k <= 32 end
+ if type(k) == "\115\116\114\105\110\103" then return k:match("\094\083\108\111\116\037\100\043\036") ~= nil or k:match("\094\037\100\043\036") ~= nil end
+ return false end
+ local function scoreContainer(t: any): number if type(t) ~= "\116\097\098\108\101" then return -1 end
+ local n = 0 local ok = pcall( function () for k, v in pairs(t) do if looksSlotKey(k) and (type(v) == "\110\117\109\098\101\114" or type(v) == "\116\097\098\108\101") then n = n + 1 end
+ end
+ end
+ ) return ok and n or -1 end
+ local function slotContainer(charEntity: any): (any?, string?) local comp = type(charEntity) == "\116\097\098\108\101" and charEntity.Character local c = type(comp) == "\116\097\098\108\101" and comp or {} local hands = type(c.Hands) == "\116\097\098\108\101" and c.Hands or {} local player = type(charEntity) == "\116\097\098\108\101" and type(charEntity.Player) == "\116\097\098\108\101" and charEntity.Player or {} local candidates = {} local function add(t: any, label: string) if type(t) == "\116\097\098\108\101" then table.insert(candidates, { t = t, label = label }) end
+ end
+ add(c.Inventory, "\067\104\097\114\097\099\116\101\114\046\073\110\118\101\110\116\111\114\121") add(c.Slots, "\067\104\097\114\097\099\116\101\114\046\083\108\111\116\115") add(c.Hotbar, "\067\104\097\114\097\099\116\101\114\046\072\111\116\098\097\114") add(c.Holdables, "\067\104\097\114\097\099\116\101\114\046\072\111\108\100\097\098\108\101\115") add(hands.Slots, "\067\104\097\114\097\099\116\101\114\046\072\097\110\100\115\046\083\108\111\116\115") add(hands.Inventory, "\067\104\097\114\097\099\116\101\114\046\072\097\110\100\115\046\073\110\118\101\110\116\111\114\121") add(hands, "\067\104\097\114\097\099\116\101\114\046\072\097\110\100\115") add(player.Inventory, "\080\108\097\121\101\114\046\073\110\118\101\110\116\111\114\121") add(c, "\067\104\097\114\097\099\116\101\114") local bestT, bestLabel, bestScore = nil, nil, -1 for _, cand in ipairs(candidates) do local score = scoreContainer(cand.t) if score > bestScore then bestT, bestLabel, bestScore = cand.t, cand.label, score end
+ end
+ return bestT, bestLabel end
+ local function slotRaw(container: any, n: number): any if type(container) ~= "\116\097\098\108\101" then return nil end
+ local v = container[n] if v == nil then v = container["\083\108\111\116" .. n] end
+ if v == nil then v = container[tostring(n)] end
+ return v end
+ local function slotEntity(v: any): (any?, number?) if type(v) == "\110\117\109\098\101\114" then local ok, ent = pcall( function () return World_m.get(v) end
+ ) return (ok and type(ent) == "\116\097\098\108\101") and ent or nil, v end
+ if type(v) == "\116\097\098\108\101" then if type(v.MarketItem) == "\116\097\098\108\101" or type(v.Holdable) == "\116\097\098\108\101" or type(v.Activate) == "\116\097\098\108\101" then return v, (type(v.Id) == "\110\117\109\098\101\114" and v.Id) or nil end
+ for _, key in ipairs({ "\073\100", "\069\110\116\105\116\121", "\069\110\116\105\116\121\073\100", "\072\111\108\100\097\098\108\101", "\086\097\108\117\101", "\073\116\101\109" }) do local id = v[key] if type(id) == "\110\117\109\098\101\114" then local ok, ent = pcall( function () return World_m.get(id) end
+ ) return (ok and type(ent) == "\116\097\098\108\101") and ent or nil, id end
+ end
+ end
+ return nil, nil end
+ local invLastErrAt = 0 local function invTick() if World_m == nil then InvStatus.Text = "\087\111\114\108\100\032\109\111\100\117\108\101\032\109\105\115\115\105\110\103" return end
+ local ok, err = pcall( function () local pid = World_m.LocalEntityId local pe = pid and World_m.get(pid) local cid = pe and pe.Player and pe.Player.CharacterControlling local ce = cid and World_m.get(cid) local comp = type(ce) == "\116\097\098\108\101" and ce.Character or nil if type(comp) ~= "\116\097\098\108\101" then InvStatus.Text = "\119\097\105\116\105\110\103\032\102\111\114\032\099\104\097\114\097\099\116\101\114\046\046\046" return end
+ local maxInv = math.floor(tonumber(comp.MaxInventory) or 9) local container, containerLabel = slotContainer(ce) local hands = type(comp.Hands) == "\116\097\098\108\101" and comp.Hands or nil local leftId = hands and hands.LeftHandHolding local rightId = hands and hands.RightHandHolding InvStatus.Text = string.format("\109\097\120\032\037\100\032\124\032\037\115", maxInv, containerLabel or "\110\111\032\115\108\111\116\032\115\111\117\114\099\101") for i = 1, InvCfg.MaxSlots do local row = invRows[i] if row then local raw = slotRaw(container, i + 5) local ent, id = slotEntity(raw) local name = nil if ent then local marketItem = ent.MarketItem if type(marketItem) == "\116\097\098\108\101" and type(marketItem.Name) == "\115\116\114\105\110\103" and marketItem.Name ~= "" then name = marketItem.Name else local displayName = entityName(ent) if displayName ~= "\060\117\110\110\097\109\101\100\062" and displayName ~= "\060\110\111\110\101\062" then name = displayName end
+ end
+ end
+ if not name and type(raw) == "\115\116\114\105\110\103" then name = blueprintName(raw) if not name and raw:match("\094\037\100\043\036") then id = tonumber(raw) local idEnt = select(1, slotEntity(id)) if idEnt then local n2 = entityName(idEnt) if n2 ~= "\060\117\110\110\097\109\101\100\062" and n2 ~= "\060\110\111\110\101\062" then name = n2 end
+ end
+ elseif not name then name = raw end
+ end
+ local withinMax = (i + 5) <= maxInv local held = id ~= nil and (id == leftId or id == rightId) or false if not withinMax then row.Name.Text = "" row.Name.TextColor3 = THEME.Dim row.Frame.BackgroundTransparency = 0.55 elseif name then row.Name.Text = name row.Name.TextColor3 = held and Color3.fromRGB(120, 255, 140) or THEME.Text row.Frame.BackgroundTransparency = held and 0.10 or 0.25 elseif container == nil then row.Name.Text = "\063" row.Name.TextColor3 = THEME.Dim row.Frame.BackgroundTransparency = 0.25 else row.Name.Text = "" row.Name.TextColor3 = THEME.Dim row.Frame.BackgroundTransparency = 0.25 end
+ end
+ end
+ end
+ ) if not ok then local now = os.clock() if now - invLastErrAt > 5 then invLastErrAt = now end
+ end
+ end
+ State.InvToken = {} local MyInvToken = State.InvToken task.spawn( function () while task.wait(InvCfg.UpdateInterval) do if State.InvToken ~= MyInvToken then return end
+ if InvGui.Enabled then pcall(invTick) end
+ end
+ end
+ ) invGUISetEnabled = function (v: boolean) Config.SlotGUI = v and true or false InvGui.Enabled = Config.SlotGUI if Config.SlotGUI then pcall(invTick) end
+ end
+ local function invDiagnose() if World_m == nil then return end
+ local ok, err = pcall( function () local pid = World_m.LocalEntityId local pe = pid and World_m.get(pid) local cid = pe and pe.Player and pe.Player.CharacterControlling local ce = cid and World_m.get(cid) local comp = type(ce) == "\116\097\098\108\101" and ce.Character or nil if type(comp) ~= "\116\097\098\108\101" then return end
+ for key, val in pairs(comp) do end
+ if type(comp.Hands) == "\116\097\098\108\101" then for key, val in pairs(comp.Hands) do end
+ end
+ local container, label = slotContainer(ce) if container then for n = 1, math.min(tonumber(comp.MaxInventory) or 9, InvCfg.MaxSlots) do local raw = slotRaw(container, n) local ent, id = slotEntity(raw) local name = ent and entityName(ent) or nil if ( not name or name == "\060\117\110\110\097\109\101\100\062") and type(raw) == "\115\116\114\105\110\103" then name = blueprintName(raw) or raw end
+ end
+ else end
+ end
+ ) if not ok then end
+ end
+ pcall( function () local env = (getgenv and getgenv()) or _G env.SilentAimSlotDiagnose = invDiagnose env.SilentAimItemESP = ItemCfg env.SilentAimSlotGUI = InvCfg end
+ ) local LaserCfg = { Enabled = true, ToggleKey = Config.LaserKey, Color = Color3.fromRGB(255, 45, 45), TipColor = Color3.fromRGB(255, 175, 175), Width = 0.06, LightEmission = 1, ShowImpact = true, ImpactSize = 0.22, AimFrom = "\109\117\122\122\108\101", Segments = 18, MaxRange = 1500, MaxDrop = 600, Gravity = 196.2, DefaultVelocity = 2000, UseDropoffModifier = true, UseDropoffSequence = true, ShowGunName = false, ShowProfile = false, HudPosition = UDim2.fromScale(0.5, 0.045), PerfPrint = false, DivWarn = true, DivWarnAngle = 15, } State.LaserToken = {} local MyLaserToken = State.LaserToken local FLAT_SEQ = { [0] = 1, [1] = 1 } local FAR_SEQ = { [0] = 0.1, [250] = 1 } local BLUEPRINTS = { { key = "\085\114\097\108", name = "\085\114\097\108\045\055\057", v = nil, mod = nil, seq = nil }, { key = "\065\099\101", name = "\065\099\101", v = nil, mod = nil, seq = nil }, { key = "\080\105\116\099\104", name = "\080\075\032\080\105\116\099\104", v = nil, mod = nil, seq = nil }, { key = "\075\105\099\107", name = "\075\073\067\075\045\049\048", v = nil, mod = nil, seq = nil }, { key = "\072\097\114\100\098\097\108\108", name = "\072\097\114\100\098\097\108\108\032\046\052\052\057", v = nil, mod = nil, seq = nil }, { key = "\082\097\121\103\117\110", name = "\082\097\121\103\117\110", v = nil, mod = nil, seq = nil }, { key = "\077\097\103\110\117\109", name = "\039\078\111\099\107\039\032\077\097\103\110\117\109", v = 1000, mod = nil, seq = FLAT_SEQ }, { key = "\068\111\112\112\105\111", name = "\068\111\112\112\105\111\032\049\050\032\071\097\117\103\101", v = nil, mod = 0.8, seq = nil }, { key = "\083\110\105\112\101\114", name = "\067\097\114\099\111\115\097\032\082\105\102\108\101", v = 3000, mod = nil, seq = FAR_SEQ }, { key = "\083\110\117\098", name = "\039\084\105\110\121\045\084\039\032\083\110\117\098", v = nil, mod = nil, seq = nil }, { key = "\070\105\120", name = "\084\104\101\032\070\105\120\032\046\051\051", v = nil, mod = nil, seq = nil }, { key = "\074\101\114\105\099\104\111", name = "\074\101\114\105\099\104\111\032\055\046\054\050", v = nil, mod = nil, seq = nil }, { key = "\083\116\114\105\107\101\111\117\116", name = "\083\116\114\105\107\101\111\117\116\032\087\073\080", v = nil, mod = 0.4, seq = nil }, { key = "\070\111\114\116\101", name = "\046\050\056\032\070\111\114\116\101", v = nil, mod = nil, seq = nil }, { key = "\080\111\112", name = "\080\079\080\032\046\050\050", v = nil, mod = nil, seq = nil }, { key = "\082\117\098\121", name = "\082\117\098\121\032\039\053\050", v = 1000, mod = nil, seq = nil }, { key = "\071\111\108\100\085\114\097\108", name = "\085\114\097\108\045\055\057", v = nil, mod = nil, seq = nil }, { key = "\082\111\109\097\110\111", name = "\082\111\109\097\110\111\032\049\050\045\053", v = nil, mod = 0.9, seq = nil }, { key = "\071\097\118\101\108", name = "\071\065\086\069\076", v = 150, mod = nil, seq = nil }, { key = "\067\114\111\115\115\098\111\119", name = "\082\117\098\121\032\039\053\050", v = 400, mod = nil, seq = FAR_SEQ }, { key = "\084\111\121\065\099\101", name = "\065\099\101", v = 400, mod = nil, seq = FLAT_SEQ }, } local BLUEPRINT_BY_NAME: { [string]: any } = {} for _, bp in ipairs(BLUEPRINTS) do if BLUEPRINT_BY_NAME[bp.name] == nil then BLUEPRINT_BY_NAME[bp.name] = bp end
+ end
+ local laserPerf = { frames = 0, arcs = 0, rays = 0, hits = 0, noGun = 0 } local laserWarnAt = 0 local function laserWarn(msg: string, gap: number) local now = os.clock() if now - laserWarnAt < gap then return end
+ laserWarnAt = now end
+ local function isGun(ent: any): boolean if type(ent) ~= "\116\097\098\108\101" then return false end
+ local act = ent.Activate local v = type(act) == "\116\097\098\108\101" and act.Value or nil return (v == "\071\117\110" or v == "\071\117\110\078\101\101\100\115\082\097\099\107\101\100") and type(ent.BulletFactory) == "\116\097\098\108\101" end
+ local function resolveHeld(): (any?, any?) if World_m == nil then return nil, nil end
+ local ok, ent, entId = pcall( function () local playerId = World_m.LocalEntityId if playerId == nil then return nil, nil end
+ local playerEntity = World_m.get(playerId) if type(playerEntity) ~= "\116\097\098\108\101" or type(playerEntity.Player) ~= "\116\097\098\108\101" then return nil, nil end
+ local charId = playerEntity.Player.CharacterControlling if charId == nil then return nil, nil end
+ local charEntity = World_m.get(charId) if type(charEntity) ~= "\116\097\098\108\101" then return nil, nil end
+ local hands = charEntity.Character and charEntity.Character.Hands if type(hands) ~= "\116\097\098\108\101" then return nil, nil end
+ local leftId = hands.LeftHandHolding local rightId = hands.RightHandHolding local left = leftId ~= nil and World_m.get(leftId) or nil local right = rightId ~= nil and World_m.get(rightId) or nil if isGun(left) then return left, leftId end
+ if isGun(right) then return right, rightId end
+ if type(left) == "\116\097\098\108\101" then return left, leftId end
+ if type(right) == "\116\097\098\108\101" then return right, rightId end
+ return nil, nil end
+ ) if not ok then return nil, nil end
+ return ent, entId end
+ local function gunName(ent: any): string if type(ent) ~= "\116\097\098\108\101" then return "\060\110\111\110\101\062" end
+ local mi = ent.MarketItem if type(mi) == "\116\097\098\108\101" and type(mi.Name) == "\115\116\114\105\110\103" and #mi.Name > 0 then return mi.Name end
+ local hold = ent.Holdable if type(hold) == "\116\097\098\108\101" and type(hold.Name) == "\115\116\114\105\110\103" and #hold.Name > 0 then return hold.Name end
+ local ok, inst = pcall( function () local model = ent.Model return model and model.Instance end
+ ) if ok and typeof(inst) == "\073\110\115\116\097\110\099\101" then return inst.Name end
+ return "\060\117\110\110\097\109\101\100\062" end
+ local function muzzleCFrame(ent: any): CFrame? if type(ent) ~= "\116\097\098\108\101" then return nil end
+ local ok, cf = pcall( function () local model = ent.Model local inst = model and model.Instance if typeof(inst) ~= "\073\110\115\116\097\110\099\101" then return nil end
+ local root = inst:FindFirstChild("\082\111\111\116") local muzzle = root and root:FindFirstChild("\077\117\122\122\108\101") if muzzle == nil then muzzle = inst:FindFirstChild("\077\117\122\122\108\101", true) end
+ if typeof(muzzle) ~= "\073\110\115\116\097\110\099\101" then return nil end
+ if muzzle:IsA("\065\116\116\097\099\104\109\101\110\116") then return muzzle.WorldCFrame elseif muzzle:IsA("\066\097\115\101\080\097\114\116") then return muzzle.CFrame elseif muzzle:IsA("\077\111\100\101\108") then return muzzle:GetPivot() end
+ return nil end
+ ) if ok and typeof(cf) == "\067\070\114\097\109\101" then return cf end
+ return nil end
+ local function makeDropCurve(seq: any): (number) -> number if type(seq) ~= "\116\097\098\108\101" then return function (_: number) return 1 end
+ end
+ local keys = {} for k in pairs(seq) do if type(k) == "\110\117\109\098\101\114" and type(seq[k]) == "\110\117\109\098\101\114" then table.insert(keys, k) end
+ end
+ if #keys == 0 then return function (_: number) return 1 end
+ end
+ table.sort(keys) local first, last = keys[1], keys[#keys] return function (d: number): number if d <= first then return seq[first] end
+ if d >= last then return seq[last] end
+ for i = 1, #keys - 1 do local a, b = keys[i], keys[i + 1] if d >= a and d <= b then local alpha = (d - a) / math.max(b - a, 1e-6) return seq[a] + (seq[b] - seq[a]) * alpha end
+ end
+ return 1 end
+ end
+ local profileCache: { ref: any, useSeq: boolean, useMod: boolean, defVel: number, prof: any }? = nil local function resolveProfile(ent: any, name: string): any local bf = type(ent) == "\116\097\098\108\101" and ent.BulletFactory or nil bf = type(bf) == "\116\097\098\108\101" and bf or {} if profileCache and profileCache.ref == bf and profileCache.useSeq == LaserCfg.UseDropoffSequence and profileCache.useMod == LaserCfg.UseDropoffModifier and profileCache.defVel == LaserCfg.DefaultVelocity then return profileCache.prof end
+ local bp = BLUEPRINT_BY_NAME[name] local velocity = bf.Velocity if type(velocity) ~= "\110\117\109\098\101\114" then velocity = bp and bp.v end
+ if type(velocity) ~= "\110\117\109\098\101\114" or velocity <= 0 then velocity = LaserCfg.DefaultVelocity end
+ local modifier = bf.DropoffModifier if type(modifier) ~= "\110\117\109\098\101\114" then modifier = bp and bp.mod end
+ local dropScale = 1 if LaserCfg.UseDropoffModifier and type(modifier) == "\110\117\109\098\101\114" and modifier > 0 then dropScale = 1 / modifier end
+ local seq = bf.DropoffSequence if type(seq) ~= "\116\097\098\108\101" then seq = bp and bp.seq end
+ local curve = LaserCfg.UseDropoffSequence and makeDropCurve(seq) or makeDropCurve(nil) local prof = { velocity = velocity, dropScale = dropScale, modifier = modifier, hasSeq = type(seq) == "\116\097\098\108\101", curve = curve, fromFile = (bp ~= nil), } profileCache = { ref = bf, useSeq = LaserCfg.UseDropoffSequence, useMod = LaserCfg.UseDropoffModifier, defVel = LaserCfg.DefaultVelocity, prof = prof, } return prof end
+ local rayParams = RaycastParams.new() rayParams.FilterType = Enum.RaycastFilterType.Exclude rayParams.IgnoreWater = true local filterChar: any = nil local filterModel: any = nil local function refreshFilter(modelInstance: any?) local char = LocalPlayer.Character if char ~= filterChar or modelInstance ~= filterModel then filterChar = char filterModel = modelInstance local list = {} if char then table.insert(list, char) end
+ if typeof(modelInstance) == "\073\110\115\116\097\110\099\101" then table.insert(list, modelInstance) end
+ local lf = workspace:FindFirstChild("\076\082\090\095\076\097\115\101\114") if lf then table.insert(list, lf) end
+ rayParams.FilterDescendantsInstances = list end
+ end
+ do pcall( function () local old = workspace:FindFirstChild("\076\082\090\095\076\097\115\101\114") if old then old:Destroy() end
+ end
+ ) end
+ local LaserFolder = Instance.new("\070\111\108\100\101\114") LaserFolder.Name = "\076\082\090\095\076\097\115\101\114" LaserFolder.Parent = workspace local pool: { any } = {} local function buildPool(count: number) for _, seg in ipairs(pool) do for _, inst in ipairs(seg) do pcall( function () inst:Destroy() end
+ ) end
+ end
+ table.clear(pool) for _ = 1, count do local a0 = Instance.new("\065\116\116\097\099\104\109\101\110\116") local a1 = Instance.new("\065\116\116\097\099\104\109\101\110\116") local beam = Instance.new("\066\101\097\109") beam.Name = "\076\082\090\095\083\101\103\109\101\110\116" beam.FaceCamera = true beam.Width0 = LaserCfg.Width beam.Width1 = LaserCfg.Width beam.Color = ColorSequence.new(LaserCfg.Color, LaserCfg.TipColor) beam.LightEmission = LaserCfg.LightEmission beam.LightInfluence = 0 beam.Enabled = false beam.Attachment0 = a0 beam.Attachment1 = a1 a0.Parent = LaserFolder a1.Parent = LaserFolder beam.Parent = LaserFolder table.insert(pool, { a0, a1, beam }) end
+ end
+ buildPool(math.clamp(math.floor(LaserCfg.Segments), 2, 32)) local impact = Instance.new("\080\097\114\116") impact.Name = "\076\082\090\095\073\109\112\097\099\116" impact.Shape = Enum.PartType.Ball impact.Size = Vector3.new(LaserCfg.ImpactSize, LaserCfg.ImpactSize, LaserCfg.ImpactSize) impact.Anchored = true impact.CanCollide = false impact.CanQuery = false impact.CanTouch = false impact.CastShadow = false impact.Material = Enum.Material.Neon impact.Color = LaserCfg.Color impact.Transparency = 1 impact.Parent = LaserFolder local function setVisualVisible(visible: boolean) for _, seg in ipairs(pool) do seg[3].Enabled = visible end
+ if not visible then impact.Transparency = 1 end
+ end
+ local LaserHud = makeGui("\076\082\090\095\072\117\100") local hudLabel: TextLabel? = nil do local label = Instance.new("\084\101\120\116\076\097\098\101\108") label.Name = "\076\097\098\101\108" label.AnchorPoint = Vector2.new(0.5, 0) label.Position = LaserCfg.HudPosition label.Size = UDim2.fromOffset(520, 22) label.BackgroundTransparency = 1 label.Font = Enum.Font.GothamBold label.TextSize = 14 label.TextColor3 = LaserCfg.Color label.TextStrokeColor3 = Color3.new(0, 0, 0) label.TextStrokeTransparency = 0.4 label.TextXAlignment = Enum.TextXAlignment.Center label.Text = "" label.Active = false label.Selectable = false label.Parent = LaserHud hudLabel = label end
+ local function setHud(_text: string) if hudLabel then hudLabel.Text = "" end
+ end
+ local function hudFor(name: string, prof: any?): string local parts = {} if LaserCfg.ShowGunName then table.insert(parts, name) end
+ if LaserCfg.ShowProfile and prof then table.insert(parts, string.format("\118\032\037\100", math.floor(prof.velocity + 0.5))) table.insert(parts, string.format("\100\114\111\112\032\120\037\046\050\102", prof.dropScale)) table.insert(parts, prof.hasSeq and "\099\117\114\118\101\032\111\110" or "\099\117\114\118\101\032\102\108\097\116") end
+ if #parts == 0 then return name end
+ return table.concat(parts, "\032\032\032\124\032\032\032") end
+ local function buildArc(origin: Vector3, dir: Vector3, prof: any): ({ any }, Vector3?) local len = dir.Magnitude if len < 1e-4 then return { origin }, nil end
+ local unit = dir / len local n = math.clamp(math.floor(LaserCfg.Segments), 2, 32) local stepLen = LaserCfg.MaxRange / n local velocity = math.max(prof.velocity, 1) local g = LaserCfg.Gravity local dropScale = prof.dropScale local curve = prof.curve local pts = { origin } local prev = origin local hitPos = nil for i = 1, n do local dist = stepLen * i local t = dist / velocity local flat = origin + unit * dist local drop = 0.5 * g * t * t * dropScale * curve(dist) if drop > LaserCfg.MaxDrop then drop = LaserCfg.MaxDrop end
+ local p = flat - Vector3.yAxis * drop laserPerf.rays = laserPerf.rays + 1 local res = workspace:Raycast(prev, p - prev, rayParams) if res then pts[#pts + 1] = res.Position hitPos = res.Position prev = res.Position break end
+ pts[#pts + 1] = p prev = p end
+ return pts, hitPos end
+ local function applyArc(pts: { any }, hitPos: Vector3?) for i = 1, #pool do local p0 = pts[i] local p1 = pts[i + 1] local seg = pool[i] if p0 and p1 then seg[1].WorldPosition = p0 seg[2].WorldPosition = p1 seg[3].Enabled = true else seg[3].Enabled = false end
+ end
+ if hitPos then laserPerf.hits = laserPerf.hits + 1 if LaserCfg.ShowImpact then impact:PivotTo(CFrame.new(hitPos)) impact.Transparency = 0 else impact.Transparency = 1 end
+ else impact.Transparency = 1 end
+ end
+ local currentHeld: any = nil local currentName = "\060\110\111\110\101\062" local currentProf: any = nil local currentMuzzleInst: any = nil local lastTipColor: Color3? = nil local lastGunKey: string? = nil local function refreshHeld() local ent = resolveHeld() currentHeld = ent if type(ent) ~= "\116\097\098\108\101" then currentName = "" currentProf = nil currentMuzzleInst = nil laserPerf.noGun = laserPerf.noGun + 1 lastGunKey = nil setHud(LaserCfg.Enabled and currentName or "") return end
+ currentName = gunName(ent) currentProf = resolveProfile(ent, currentName) local ok, inst = pcall( function () local model = ent.Model return model and model.Instance end
+ ) currentMuzzleInst = (ok and typeof(inst) == "\073\110\115\116\097\110\099\101") and inst or nil setHud(LaserCfg.Enabled and hudFor(currentName, currentProf) or "") local key = string.format( "\037\115\124\118\037\100\124\120\037\046\050\102\124\037\115\124\037\115", currentName, math.floor(currentProf.velocity + 0.5), currentProf.dropScale, tostring(currentProf.hasSeq), tostring(currentProf.fromFile) ) if key ~= lastGunKey then lastGunKey = key end
+ end
+ task.spawn( function () while task.wait(0.1) do if State.LaserToken ~= MyLaserToken then return end
+ local want = math.clamp(math.floor(LaserCfg.Segments), 2, 32) if want ~= #pool then LaserCfg.Segments = want buildPool(want) refreshFilter(nil) end
+ for _, seg in ipairs(pool) do local beam = seg[3] if beam.Width0 ~= LaserCfg.Width then beam.Width0 = LaserCfg.Width beam.Width1 = LaserCfg.Width end
+ if beam.LightEmission ~= LaserCfg.LightEmission then beam.LightEmission = LaserCfg.LightEmission end
+ end
+ if impact.Size.X ~= LaserCfg.ImpactSize then impact.Size = Vector3.new(LaserCfg.ImpactSize, LaserCfg.ImpactSize, LaserCfg.ImpactSize) end
+ if impact.Color ~= LaserCfg.Color or lastTipColor ~= LaserCfg.TipColor then lastTipColor = LaserCfg.TipColor impact.Color = LaserCfg.Color local seq = ColorSequence.new(LaserCfg.Color, LaserCfg.TipColor) for _, seg in ipairs(pool) do seg[3].Color = seq end
+ if hudLabel then hudLabel.TextColor3 = LaserCfg.Color end
+ end
+ refreshFilter(currentMuzzleInst) local ok, err = pcall(refreshHeld) if not ok then laserWarn("\091\076\082\090\093\032\104\101\108\100\045\103\117\110\032\114\101\097\100\032\102\097\105\108\101\100\058\032" .. tostring(err), 5) end
+ end
+ end
+ ) local lastDivWarnAt = 0 local laserUpdateAccumulator = 0 local LASER_UPDATE_INTERVAL = 0.05 local function checkDivergence(muzzleCF: CFrame) if not LaserCfg.DivWarn then return end
+ local cam = workspace.CurrentCamera if not cam then return end
+ local dot = muzzleCF.LookVector:Dot(cam.CFrame.LookVector) dot = math.clamp(dot, -1, 1) local degrees = math.deg(math.acos(dot)) if degrees > LaserCfg.DivWarnAngle then local now = os.clock() if now - lastDivWarnAt > 15 then lastDivWarnAt = now end
+ end
+ end
+ trackConnection(RunService.RenderStepped:Connect( function (dt) if State.LaserToken ~= MyLaserToken then return end
+ laserPerf.frames = laserPerf.frames + 1 laserUpdateAccumulator += dt if laserUpdateAccumulator < LASER_UPDATE_INTERVAL then return end
+ laserUpdateAccumulator %= LASER_UPDATE_INTERVAL if not LaserCfg.Enabled then setVisualVisible(false) return end
+ if type(currentHeld) ~= "\116\097\098\108\101" or currentProf == nil then setVisualVisible(false) return end
+ local muzzleCF = muzzleCFrame(currentHeld) if muzzleCF == nil then setVisualVisible(false) return end
+ local origin = muzzleCF.Position local dir = muzzleCF.LookVector if LaserCfg.AimFrom == "\099\097\109\101\114\097" then local cam = workspace.CurrentCamera if cam then dir = cam.CFrame.LookVector end
+ else checkDivergence(muzzleCF) end
+ laserPerf.arcs = laserPerf.arcs + 1 local pts, hitPos = buildArc(origin, dir, currentProf) applyArc(pts, hitPos) end
+ )) laserSetEnabled = function (v: boolean) LaserCfg.Enabled = v and true or false Config.LaserSight = LaserCfg.Enabled if not LaserCfg.Enabled then setVisualVisible(false) setHud("") elseif currentHeld then setHud(hudFor(currentName, currentProf)) end
+ end
+ trackConnection(UserInputService.InputBegan:Connect( function (input, gameProcessed) if gameProcessed then return end
+ if input.KeyCode == LaserCfg.ToggleKey then laserSetEnabled( not LaserCfg.Enabled) ToggleLaser.Set(LaserCfg.Enabled) end
+ end
+ )) if not LaserCfg.Enabled then setVisualVisible(false) setHud("") end
+ local function laserDiagnose() local ent, entId = resolveHeld() local cf = type(ent) == "\116\097\098\108\101" and muzzleCFrame(ent) or nil if currentProf then end
+ end
+ pcall( function () local env = (getgenv and getgenv()) or _G env.LaserSightConfig = LaserCfg env.LaserSight = env.LaserSight or {} env.LaserSight.Diagnose = laserDiagnose end
+ ) task.spawn( function () while task.wait(10) do if State.LaserToken ~= MyLaserToken then return end
+ if LaserCfg.PerfPrint then end
+ laserPerf.frames, laserPerf.arcs, laserPerf.rays, laserPerf.hits, laserPerf.noGun = 0, 0, 0, 0, 0 end
+ end
+ ) if World_m == nil then end
+ if Config.HookRaycast2 and OriginalRaycast then Raycast2.Raycast = function (origin, direction, params, filterFunc, visualize) local redirected = false if direction.Magnitude >= Config.MinRayLength then local newDir = buildRedirect(origin, direction, params, filterFunc, false) if newDir then direction = newDir redirected = true end
+ end
+ local result = OriginalRaycast(origin, direction, params, filterFunc, visualize or Config.DebugRays) if redirected then drawRayFromResult(origin, result) end
+ return result end
+ end
+ if Config.HookBulletFactory and OriginalRaycastFire then BulletFactory.RaycastFire = function (gunId, origin, direction, ...) redirectedLastShot = false local redirected = buildRedirect(origin, direction, nil, BulletFactory.CanBulletPassThrough, false) if redirected then direction = redirected redirectedLastShot = true end
+ local result = OriginalRaycastFire(gunId, origin, direction, ...) local drew, usable = drawRayFromResult(origin, result) if not drew and not usable and redirectedLastShot and lastRedirectPart and lastRedirectPart.Parent then drawRayBetween(origin, lastRedirectPart.Position) end
+ return result end
+ end
+ if Config.FixHitPacket and Packets then local ok, err = pcall( function () local bulletHit = Packets.ToServer.packets.bulletHit local OriginalSend = bulletHit.send bulletHit.send = function (payload, ...) if redirectedLastShot and payload and payload.origin and payload.direction and payload.bulletRaycast and payload.bulletRaycast.Result then local delta = payload.bulletRaycast.Result.Position - payload.origin if delta.Magnitude > 0 then payload.direction = delta.Unit * payload.direction.Magnitude end
+ end
+ if payload and payload.origin and payload.bulletRaycast and payload.bulletRaycast.Result then local hitPos = payload.bulletRaycast.Result.Position if typeof(hitPos) == "\086\101\099\116\111\114\051" and (redirectedLastShot or playerHitNear(hitPos, 6)) then drawRayBetween(payload.origin, hitPos) end
+ end
+ redirectedLastShot = false return OriginalSend(payload, ...) end
+ end
+ ) if not ok then end
+ end
+ local function isShiftDown(): boolean return UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift) end
+ trackConnection(UserInputService.InputBegan:Connect( function (input, gameProcessed) if gameProcessed then return end
+ if isShiftDown() then if input.KeyCode == Config.PanelKey then setPanelVisible( not PanelGui.Enabled) elseif input.KeyCode == Config.ToggleKey then setEnabled( not Config.Enabled) end
+ elseif input.KeyCode == Config.CyclePartKey then Config.AimModeIndex = Config.AimModeIndex % #Config.AimModes + 1 end
+ end
+ )) State.LockedPart = nil State.LockedChar = nil State.TargetCacheTime = 0 trackConnection(RunService.RenderStepped:Connect( function () Camera = workspace.CurrentCamera or Camera pruneRays() local now = os.clock() if now - State.TargetCacheTime >= 0.06 then State.TargetCacheTime = now if Config.Enabled then State.LockedPart, State.LockedChar = getBestTarget() else State.LockedPart, State.LockedChar = nil, nil end
+ end
+ local aimPoint = getAimPoint() Ring.Visible = Config.ShowFOV and Config.Enabled Ring.Position = UDim2.fromOffset(aimPoint.X, aimPoint.Y) Ring.Size = UDim2.fromOffset(math.max(Config.FOV * 2, 2), math.max(Config.FOV * 2, 2)) RingStroke.Color = Config.FOVColor RingStroke.Thickness = Config.FOVThickness end
+ )) pcall( function () local env = (getgenv and getgenv()) or _G env.SilentAim = Config end
+ ) refreshIndicator() end
+ )(...)
